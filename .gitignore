@@ -1,0 +1,19 @@
+# WordPress core is fetched by assemble.sh, never committed.
+/wp-admin/
+/wp-includes/
+/wp-*.php
+!/wp-config.php
+/index.php
+/xmlrpc.php
+/license.txt
+/readme.html
+/wp-content/plugins/
+/wp-content/themes/
+/wp-content/uploads/
+/wp-content/upgrade/
+/wp-content/languages/
+
+# Per-site databases and assembled docroots.
+*.db
+*.db-wal
+*.db-shm
