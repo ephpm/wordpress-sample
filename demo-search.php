@@ -79,7 +79,7 @@ try {
       for (const r of msg.results) {
         const li = document.createElement('li');
         const a = document.createElement('a');
-        a.href = '?p=' + r.id;
+        a.href = '/?p=' + r.id;
         a.textContent = r.title;
         li.appendChild(a);
         resultsEl.appendChild(li);
