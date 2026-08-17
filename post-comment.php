@@ -94,4 +94,27 @@ try {
     $delivered = 0;
 }
 
+// Also fan out to the site-wide activity ticker (?channel=activity).
+try {
+    $title = 'a post';
+    $tr = ephpm_db_query('SELECT post_title FROM wp_posts WHERE ID = ? LIMIT 1', [$post_id]);
+    if (!empty($tr[0]['post_title'])) {
+        $title = (string) $tr[0]['post_title'];
+    }
+    ephpm_ws_broadcast('activity', json_encode([
+        'type'  => 'event',
+        'event' => [
+            'kind'  => 'comment',
+            'icon'  => 'C',
+            'who'   => $author,
+            'what'  => 'commented on',
+            'title' => $title,
+            'url'   => '/?p=' . $post_id,
+            'date'  => $now_local,
+        ],
+    ]));
+} catch (\Throwable $e) {
+    // best-effort
+}
+
 echo json_encode(['ok' => true, 'comment' => $comment, 'delivered' => $delivered]);

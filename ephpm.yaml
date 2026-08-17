@@ -9,6 +9,13 @@ services:
   websocket: true
 seed:
   - "wp core install --url=$PREVIEW_URL --title=\"ePHPm Preview\" --admin_user=admin --admin_email=preview@example.com --skip-email"
+  # Full public showcase (magazine theme, ~10 plugins, 150+ posts with
+  # featured images, a WooCommerce store, an Elementor page, and the live
+  # activity ticker). Downloads theme/plugins from wp.org, then drives the
+  # in-docroot seed/*.php generators over HTTP so every insert/activation runs
+  # through the db-wordpress drop-in -> Turso. See seed/install.sh.
+  # Requires EPHPM_SEED_TOKEN to be exported into the site's PHP environment.
+  - "DOCROOT=. HOST=$PREVIEW_HOST bash seed/install.sh"
 env:
   WP_ENVIRONMENT_TYPE: "staging"
 health: "/"

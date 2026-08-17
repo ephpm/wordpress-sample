@@ -337,7 +337,46 @@ class Db extends \wpdb
     public static function translateMysqlToBridge(string $sql): string
     {
         $sql = self::rewriteOnDuplicateKeyUpdate($sql);
+        $sql = self::rewriteInsertIgnore($sql);
         $sql = self::rewriteMultiTableDelete($sql);
+        $sql = self::rewriteAliasJoinDelete($sql);
+        $sql = self::rewriteTruncate($sql);
+        $sql = self::stripOnUpdateCurrentTimestamp($sql);
+        $sql = self::rewriteUnsupportedAlter($sql);
+        $sql = self::rewriteInformationSchemaIndexProbe($sql);
+        $sql = self::stripFromDual($sql);
+
+        return $sql;
+    }
+
+    /**
+     * `INSERT IGNORE INTO …` → `INSERT OR IGNORE INTO …`. MySQL's IGNORE
+     * modifier (skip rows that would violate a constraint) maps exactly to
+     * SQLite's `OR IGNORE` conflict clause. The `INSERT IGNORE` +
+     * `ON DUPLICATE KEY UPDATE` combination is handled earlier by
+     * {@see Db::rewriteOnDuplicateKeyUpdate()} (→ INSERT OR REPLACE), so by
+     * the time this runs only a plain `INSERT IGNORE` remains. WooCommerce's
+     * lookup-table population (`wp_wc_category_lookup`) uses it.
+     */
+    public static function rewriteInsertIgnore(string $sql): string
+    {
+        $out = preg_replace('/^(\s*)INSERT\s+IGNORE\s+INTO\b/i', '${1}INSERT OR IGNORE INTO', $sql, 1, $count);
+
+        return (\is_string($out) && $count > 0) ? $out : $sql;
+    }
+
+    /**
+     * A WooCommerce / plugin index-existence probe against
+     * `INFORMATION_SCHEMA.STATISTICS` — which the embedded engine has no
+     * equivalent for — is rewritten to `SELECT 1`, reporting the index as
+     * present so the caller skips the follow-up `ALTER TABLE … ADD/DROP KEY`
+     * that SQLite cannot perform anyway (the key was fixed at CREATE time).
+     */
+    public static function rewriteInformationSchemaIndexProbe(string $sql): string
+    {
+        if (preg_match('/^\s*SELECT\b.*\bFROM\s+INFORMATION_SCHEMA\.STATISTICS\b/is', $sql)) {
+            return 'SELECT 1';
+        }
 
         return $sql;
     }
@@ -470,6 +509,148 @@ class Db extends \wpdb
 
         return "DELETE FROM {$outerTable} WHERE rowid IN ("
             . implode(' UNION ', $selects) . ')';
+    }
+
+    /**
+     * `DELETE <alias> FROM <table> <alias> <join…> WHERE …` — the
+     * single-target MySQL multi-table delete (one delete target, joined to
+     * one or more other references), as Yoast SEO's indexable de-duplication
+     * emits (`DELETE wyi FROM wp_yoast_indexable wyi INNER JOIN
+     * wp_yoast_indexable wyi2 WHERE …`).
+     *
+     * → `DELETE FROM <table> WHERE rowid IN (SELECT <alias>.rowid FROM
+     *    <table> <alias> <join…> WHERE …)`.
+     *
+     * The delete-target alias must be the alias bound to the immediately
+     * following base table; otherwise the statement is returned unchanged.
+     * The comma-separated multi-target shape is handled by
+     * {@see Db::rewriteMultiTableDelete()} and runs first.
+     */
+    public static function rewriteAliasJoinDelete(string $sql): string
+    {
+        if (!preg_match(
+            '/^\s*DELETE\s+(`?\w+`?)\s+FROM\s+(`?[\w.]+`?)\s+(`?\w+`?)\b(.*)$/is',
+            $sql,
+            $m
+        )) {
+            return $sql;
+        }
+
+        $targetAlias = trim($m[1], '`');
+        $tableAlias = trim($m[3], '`');
+        if (0 !== strcasecmp($targetAlias, $tableAlias)) {
+            return $sql;
+        }
+
+        return 'DELETE FROM ' . $m[2]
+            . ' WHERE rowid IN (SELECT ' . $m[3] . '.rowid FROM '
+            . $m[2] . ' ' . $m[3] . $m[4] . ')';
+    }
+
+    /**
+     * `TRUNCATE [TABLE] <t>` → `DELETE FROM <t>`. SQLite has no TRUNCATE;
+     * plugins (Yoast SEO's reset routines) use it to empty their tables.
+     */
+    public static function rewriteTruncate(string $sql): string
+    {
+        if (preg_match('/^\s*TRUNCATE\s+(?:TABLE\s+)?(`?[A-Za-z0-9_.]+`?)\s*;?\s*$/is', $sql, $m)) {
+            return 'DELETE FROM ' . $m[1];
+        }
+
+        return $sql;
+    }
+
+    /**
+     * Strip the MySQL `ON UPDATE CURRENT_TIMESTAMP` column attribute (with
+     * optional fractional-seconds precision). SQLite has no auto-update
+     * timestamp; the `DEFAULT CURRENT_TIMESTAMP` it follows is accepted
+     * as-is by the embedded engine. Applies to CREATE and ALTER column
+     * definitions alike (Yoast SEO's `created_at`/`updated_at` columns).
+     */
+    public static function stripOnUpdateCurrentTimestamp(string $sql): string
+    {
+        $out = preg_replace(
+            '/\s+ON\s+UPDATE\s+CURRENT_TIMESTAMP(?:\s*\(\s*\d*\s*\))?/i',
+            '',
+            $sql
+        );
+
+        return \is_string($out) ? $out : $sql;
+    }
+
+    /**
+     * No-op the MySQL-only `ALTER TABLE` forms SQLite cannot perform:
+     *
+     *  - `ALTER TABLE … CONVERT TO CHARACTER SET …` — charset is fixed
+     *    (SQLite TEXT is UTF-8), so the conversion is meaningless.
+     *  - `ALTER TABLE <t> CHANGE|MODIFY …` (when the statement is exclusively
+     *    column re-typing, i.e. contains no ADD/DROP clause) — SQLite cannot
+     *    change a column's type or name in place, and its dynamic typing
+     *    makes the declared type cosmetic, so the existing column stands.
+     *
+     * Both are common in plugin schema-normalisation passes (Yoast SEO,
+     * ActionScheduler bundled by WPForms/WooCommerce). Rewritten to
+     * `SELECT 1` so the statement succeeds without altering anything.
+     */
+    public static function rewriteUnsupportedAlter(string $sql): string
+    {
+        $trimmed = ltrim($sql);
+
+        if (!preg_match('/^ALTER\s+TABLE\b/i', $trimmed)) {
+            return $sql;
+        }
+
+        /*
+         * The only ALTER TABLE operations SQLite supports are ADD COLUMN,
+         * DROP COLUMN and RENAME (COLUMN|TO). Every other MySQL ALTER
+         * operation — key/index management, charset conversion, column
+         * re-typing and column-default changes — is impossible after CREATE
+         * TABLE. WordPress core's dbDelta and WooCommerce's schema
+         * reconciliation emit these one operation per statement to sync an
+         * existing table to its declared shape; because the embedded engine
+         * fixed those very properties at CREATE time, the operations are
+         * idempotent no-ops. Rewrite the statement to `SELECT 1` so it
+         * succeeds without a parse error rather than aborting the migration.
+         *
+         * Each marker is a distinct operation keyword, so it never fires on a
+         * plain `ADD COLUMN name TYPE` (which has no such keyword after ADD).
+         */
+        $unsupportedOp = '/'
+            . '\bCONVERT\s+TO\s+CHARACTER\s+SET\b'          // charset conversion
+            . '|\bDROP\s+PRIMARY\s+KEY\b'                   // drop PK
+            . '|\bADD\s+PRIMARY\s+KEY\b'                    // add PK
+            . '|\bADD\s+(?:UNIQUE\s+|FULLTEXT\s+|SPATIAL\s+)?(?:KEY|INDEX)\b'  // add index
+            . '|\bDROP\s+(?:KEY|INDEX)\b'                   // drop index
+            . '|\bADD\s+CONSTRAINT\b'                       // add constraint / FK
+            . '|\bALTER\s+(?:COLUMN\s+)?`?[A-Za-z_][A-Za-z0-9_]*`?\s+(?:SET|DROP)\s+DEFAULT\b'  // column default change
+            . '/is';
+        if (preg_match($unsupportedOp, $trimmed)) {
+            return 'SELECT 1';
+        }
+
+        // Column re-typing/renaming SQLite cannot do in place, when the
+        // statement is exclusively CHANGE/MODIFY (no ADD/DROP we would drop).
+        if (
+            preg_match('/^ALTER\s+TABLE\s+\S+\s+(?:CHANGE|MODIFY)\b/is', $trimmed)
+            && !preg_match('/\b(?:ADD|DROP)\s/i', $trimmed)
+        ) {
+            return 'SELECT 1';
+        }
+
+        return $sql;
+    }
+
+    /**
+     * Drop the MySQL `FROM dual` dummy table. A `SELECT … WHERE …` with no
+     * FROM clause is valid SQLite, so `… FROM dual WHERE …` becomes
+     * `… WHERE …`. ActionScheduler's idempotent insert
+     * (`INSERT … SELECT … FROM dual WHERE NOT EXISTS (…)`) relies on it.
+     */
+    public static function stripFromDual(string $sql): string
+    {
+        $out = preg_replace('/\bFROM\s+dual\b/i', '', $sql);
+
+        return \is_string($out) ? $out : $sql;
     }
 
     /**

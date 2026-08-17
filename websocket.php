@@ -38,6 +38,67 @@ if ($event === 'connect') {
     parse_str($_SERVER['QUERY_STRING'] ?? '', $q);
     $channel = isset($q['channel']) ? (string) $q['channel'] : '';
 
+    // Site-wide live activity ticker: ?channel=activity.
+    // Seeded with recent real events (comments + posts) so a fresh visitor
+    // sees the site's pulse immediately; new events arrive via
+    // ephpm_ws_broadcast('activity', ...) from ordinary HTTP requests and
+    // WordPress hooks (see wp-content/mu-plugins/activity-ticker.php).
+    if ($channel === 'activity') {
+        ephpm_ws_subscribe('activity');
+
+        $events = [];
+
+        // Recent comments with their post title.
+        $rows = ws_db_query(
+            'SELECT c.comment_ID, c.comment_author, c.comment_content, c.comment_date, '
+            . 'p.post_title, p.ID AS post_id '
+            . 'FROM wp_comments c JOIN wp_posts p ON p.ID = c.comment_post_ID '
+            . "WHERE c.comment_approved = '1' AND p.post_status = 'publish' "
+            . 'ORDER BY c.comment_date DESC, c.comment_ID DESC LIMIT 8'
+        );
+        foreach ($rows as $r) {
+            $events[] = [
+                'kind'  => 'comment',
+                'icon'  => 'C',
+                'who'   => (string) $r['comment_author'],
+                'what'  => 'commented on',
+                'title' => (string) $r['post_title'],
+                'url'   => '/?p=' . (int) $r['post_id'],
+                'date'  => (string) $r['comment_date'],
+            ];
+        }
+
+        // Recent published posts.
+        $rows = ws_db_query(
+            'SELECT ID, post_title, post_date FROM wp_posts '
+            . "WHERE post_status = 'publish' AND post_type = 'post' "
+            . 'ORDER BY post_date DESC LIMIT 8'
+        );
+        foreach ($rows as $r) {
+            $events[] = [
+                'kind'  => 'post',
+                'icon'  => 'P',
+                'who'   => 'Editorial',
+                'what'  => 'published',
+                'title' => (string) $r['post_title'],
+                'url'   => '/?p=' . (int) $r['ID'],
+                'date'  => (string) $r['post_date'],
+            ];
+        }
+
+        // Newest first, capped.
+        usort($events, static fn ($a, $b) => strcmp($b['date'], $a['date']));
+        $events = array_slice($events, 0, 12);
+
+        ephpm_ws_send(json_encode([
+            'type'    => 'history',
+            'channel' => 'activity',
+            'events'  => $events,
+        ]));
+
+        return;
+    }
+
     // A live comments room: ?channel=comments:<postid>.
     if (preg_match('/^comments:(\d+)$/', $channel, $m)) {
         ephpm_ws_subscribe($channel);

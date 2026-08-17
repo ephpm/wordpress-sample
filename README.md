@@ -26,8 +26,29 @@ per-event WebSocket handlers that query the same Turso database.
 | `websocket.php` | Native-WebSocket entrypoint (`[server] websocket_files`). Routes on `$_SERVER['WS_EVENT']`; queries the per-site Turso DB from socket events. |
 | `demo-search.php` | Live post-title typeahead streamed over a WebSocket (searches `wp_posts`). |
 | `demo-comments.php` | Live comments room for a post: history from `wp_comments`, new comments pushed live. |
-| `post-comment.php` | Ordinary HTTP handler that inserts a comment and `ephpm_ws_broadcast()`s it to the room — the HTTP-to-socket showcase. |
+| `post-comment.php` | Ordinary HTTP handler that inserts a comment and `ephpm_ws_broadcast()`s it to both the room and the site-wide `activity` channel. |
+| `mu-plugins/activity-ticker.php` | Site-wide **live activity ticker**: a corner widget injected on every front-end page opens `wss://<host>/?channel=activity`; comments, new posts, WooCommerce orders and page views are broadcast to it from ordinary PHP via `ephpm_ws_broadcast()`. A public visitor sees the site pulse in real time. |
+| `seed/*.php` | Token-gated content/store generators (`EPHPM_SEED_TOKEN`) run **through the drop-in** over HTTP: `content.php` (posts, GD featured images, comments, pages, nav menu), `store.php` (WooCommerce products + orders), `elementor.php` (a sample Elementor page). |
+| `seed/install.sh`, `seed/plugins.txt` | Downloads a magazine theme + ~10 wp.org plugins, then drives the generators — the reproducible "make it busy" recipe. |
 | `ephpm.yaml` | Deploy manifest (php, docroot, `services: {database, kv, websocket}`, seed, health, ini). |
+
+## The full showcase
+
+`seed/install.sh` + the `seed/*.php` generators turn a bare install into a
+busy public magazine site to exercise the drop-in under a real plugin-heavy
+workload: a magazine theme (ColorMag), ~10 activated plugins (Yoast SEO,
+WooCommerce, Elementor, bbPress, Contact Form 7, WPForms, FooGallery,
+Contextual Related Posts, WP-PageNavi, Classic Editor), 150+ posts with
+generated featured images, hundreds of comments, ~15 pages, a nav menu, a
+~45-product WooCommerce store with sample orders, and an Elementor-built page.
+
+Every plugin activation hook and every insert runs through the
+`ephpm/db-wordpress` drop-in against the embedded Turso engine — which is the
+point: the MySQL DDL/DML those plugins emit (`ON UPDATE CURRENT_TIMESTAMP`,
+`ALTER … CONVERT/CHANGE/MODIFY`, `TRUNCATE`, multi-table `DELETE`, `INSERT
+IGNORE`, `ADD/DROP PRIMARY KEY`, `INFORMATION_SCHEMA` probes, `FROM dual`)
+is translated to SQLite-compatible SQL by the drop-in so it all works on a
+single embedded database.
 | `ephpm.json` | Legacy preview metadata: `{ "seed": "wp-install", "php": "8.5" }`. |
 
 WordPress core itself is **not committed** — `assemble.sh` fetches it, keeping

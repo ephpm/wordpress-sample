@@ -1,0 +1,12 @@
+# wp.org plugin slugs installed + activated for the showcase (one per line).
+# All activate cleanly through the ephpm/db-wordpress drop-in on embedded Turso.
+classic-editor
+wp-pagenavi
+contextual-related-posts
+contact-form-7
+bbpress
+wpforms-lite
+foogallery
+wordpress-seo
+elementor
+woocommerce

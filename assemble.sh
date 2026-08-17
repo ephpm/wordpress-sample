@@ -55,6 +55,10 @@ cp "$HERE/post-comment.php"  "$DOCROOT/post-comment.php"
 cp "$HERE/demo-search.php"   "$DOCROOT/demo-search.php"
 cp "$HERE/demo-comments.php" "$DOCROOT/demo-comments.php"
 
+echo "Installing the showcase seed generators (token-gated, in-docroot) ..."
+mkdir -p "$DOCROOT/seed"
+cp "$HERE/seed/"*.php "$DOCROOT/seed/"
+
 echo "Done. Docroot ready at: $DOCROOT"
 echo "Seed the per-site database by running the WordPress web installer once:"
 echo "  curl -H 'Host: <site>' --data-urlencode weblog_title=... \\"
