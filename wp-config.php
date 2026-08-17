@@ -62,6 +62,14 @@ define('NONCE_SALT',       'ephpm-preview-8');
 // docroot (assemble.sh places it at <docroot>/ephpm-db/autoload.php).
 define('EPHPM_DB_AUTOLOAD', __DIR__ . '/ephpm-db/autoload.php');
 
+// The ephpm/cache-wordpress object-cache drop-in (wp-content/object-cache.php)
+// finds its classes the same open_basedir-safe way: an autoloader that lives
+// under this docroot (assemble.sh places it at <docroot>/ephpm-cache/autoload.php).
+// This makes WordPress use ePHPm's embedded KV store for its persistent object
+// cache. If ephpm_kv_* is unavailable the drop-in degrades to the built-in
+// non-persistent cache instead of fataling.
+define('EPHPM_CACHE_AUTOLOAD', __DIR__ . '/ephpm-cache/autoload.php');
+
 $table_prefix = 'wp_';
 
 if (!defined('ABSPATH')) {

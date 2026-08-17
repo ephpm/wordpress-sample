@@ -1,0 +1,16 @@
+version: 1
+php: "8.5"
+docroot: "."
+build:
+  - "composer install --no-dev --optimize-autoloader --no-interaction"   # only if composer.json present
+services:
+  database: "turso"
+  kv: true
+  websocket: true
+seed:
+  - "wp core install --url=$PREVIEW_URL --title=\"ePHPm Preview\" --admin_user=admin --admin_email=preview@example.com --skip-email"
+env:
+  WP_ENVIRONMENT_TYPE: "staging"
+health: "/"
+ini:
+  memory_limit: "256M"

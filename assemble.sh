@@ -39,6 +39,22 @@ cp "$HERE/dropin/db.php"        "$DOCROOT/wp-content/db.php"
 cp "$HERE/ephpm-db/src/"*.php   "$DOCROOT/ephpm-db/src/"
 cp "$HERE/ephpm-db/autoload.php" "$DOCROOT/ephpm-db/autoload.php"
 
+echo "Installing ephpm/cache-wordpress object-cache drop-in (real files, in-docroot) ..."
+mkdir -p "$DOCROOT/ephpm-cache/src"
+cp "$HERE/dropin/object-cache.php"  "$DOCROOT/wp-content/object-cache.php"
+cp "$HERE/ephpm-cache/src/"*.php     "$DOCROOT/ephpm-cache/src/"
+cp "$HERE/ephpm-cache/autoload.php"  "$DOCROOT/ephpm-cache/autoload.php"
+
+echo "Installing preview must-use plugin (suppresses mail(), which the embedded PHP lacks) ..."
+mkdir -p "$DOCROOT/wp-content/mu-plugins"
+cp "$HERE/mu-plugins/"*.php "$DOCROOT/wp-content/mu-plugins/"
+
+echo "Installing the WebSocket + Turso + KV demo pages ..."
+cp "$HERE/websocket.php"     "$DOCROOT/websocket.php"
+cp "$HERE/post-comment.php"  "$DOCROOT/post-comment.php"
+cp "$HERE/demo-search.php"   "$DOCROOT/demo-search.php"
+cp "$HERE/demo-comments.php" "$DOCROOT/demo-comments.php"
+
 echo "Done. Docroot ready at: $DOCROOT"
 echo "Seed the per-site database by running the WordPress web installer once:"
 echo "  curl -H 'Host: <site>' --data-urlencode weblog_title=... \\"
