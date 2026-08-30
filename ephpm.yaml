@@ -2,6 +2,12 @@ version: 1
 php: "8.5"
 docroot: "."
 build:
+  # Assemble the deployable docroot IN PLACE (docroot is "."): fetch WordPress
+  # core and lay down the drop-ins the checkout does not already carry.
+  # assemble.sh is same-path aware, so the files that came with the checkout are
+  # left untouched rather than a `cp a a` aborting the build (which left an
+  # empty/broken docroot on redeploy).
+  - "./assemble.sh ."
   - "composer install --no-dev --optimize-autoloader --no-interaction"   # only if composer.json present
 services:
   database: "turso"
