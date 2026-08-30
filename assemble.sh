@@ -14,11 +14,47 @@
 # shared checkout): ePHPm multi-tenant mode confines each vhost with
 # open_basedir, which denies a symlinked drop-in and silently drops WordPress
 # back to mysqli. Everything here is copied in as a real file.
+#
+# Same-path (docroot ".") support
+# -------------------------------
+# The preview pipeline (ephpm/switchboard) checks the repo out and runs this as
+# `./assemble.sh .` with `docroot: "."`, so the docroot IS this repo checkout.
+# In that case HERE == the docroot and most `cp "$HERE/x" "$DOCROOT/x"` pairs
+# are the *same file*: a plain `cp a a` fails ("are the same file"), and under
+# `set -e` that aborts the whole assemble — the redeploy that made this script
+# necessary produced a broken/empty docroot. Every copy therefore goes through
+# `copy_file`, which skips when source and destination are the same inode. The
+# files that are genuinely already in place (they came with the checkout) are
+# left untouched; only the things that must move (WordPress core, the two
+# wp-content drop-ins, the mu-plugins) are actually copied.
 set -euo pipefail
 
 DOCROOT="${1:?usage: assemble.sh <docroot>}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WP_VERSION="${WP_VERSION:-latest}"
+
+# Copy $1 -> $2 unless they are the very same file (same device+inode). `-ef`
+# is false when the destination does not exist yet, so a normal copy still runs.
+copy_file() {
+  local src="$1" dest="$2"
+  if [ -e "$dest" ] && [ "$src" -ef "$dest" ]; then
+    echo "  (already in place, skipping: $dest)"
+    return 0
+  fi
+  mkdir -p "$(dirname "$dest")"
+  cp "$src" "$dest"
+}
+
+# Copy each source file into a destination directory (by basename), same-path
+# guarded. Usage: copy_into_dir <dest_dir> <src_file>...
+copy_into_dir() {
+  local dest_dir="$1"; shift
+  mkdir -p "$dest_dir"
+  local src
+  for src in "$@"; do
+    copy_file "$src" "$dest_dir/$(basename "$src")"
+  done
+}
 
 mkdir -p "$DOCROOT"
 
@@ -31,33 +67,29 @@ else
 fi
 
 echo "Installing dynamic-host wp-config.php ..."
-cp "$HERE/wp-config.php" "$DOCROOT/wp-config.php"
+copy_file "$HERE/wp-config.php" "$DOCROOT/wp-config.php"
 
 echo "Installing ephpm/db-wordpress drop-in (real files, in-docroot) ..."
-mkdir -p "$DOCROOT/wp-content" "$DOCROOT/ephpm-db/src"
-cp "$HERE/dropin/db.php"        "$DOCROOT/wp-content/db.php"
-cp "$HERE/ephpm-db/src/"*.php   "$DOCROOT/ephpm-db/src/"
-cp "$HERE/ephpm-db/autoload.php" "$DOCROOT/ephpm-db/autoload.php"
+copy_file "$HERE/dropin/db.php" "$DOCROOT/wp-content/db.php"
+copy_into_dir "$DOCROOT/ephpm-db/src" "$HERE/ephpm-db/src/"*.php
+copy_file "$HERE/ephpm-db/autoload.php" "$DOCROOT/ephpm-db/autoload.php"
 
 echo "Installing ephpm/cache-wordpress object-cache drop-in (real files, in-docroot) ..."
-mkdir -p "$DOCROOT/ephpm-cache/src"
-cp "$HERE/dropin/object-cache.php"  "$DOCROOT/wp-content/object-cache.php"
-cp "$HERE/ephpm-cache/src/"*.php     "$DOCROOT/ephpm-cache/src/"
-cp "$HERE/ephpm-cache/autoload.php"  "$DOCROOT/ephpm-cache/autoload.php"
+copy_file "$HERE/dropin/object-cache.php" "$DOCROOT/wp-content/object-cache.php"
+copy_into_dir "$DOCROOT/ephpm-cache/src" "$HERE/ephpm-cache/src/"*.php
+copy_file "$HERE/ephpm-cache/autoload.php" "$DOCROOT/ephpm-cache/autoload.php"
 
 echo "Installing preview must-use plugin (suppresses mail(), which the embedded PHP lacks) ..."
-mkdir -p "$DOCROOT/wp-content/mu-plugins"
-cp "$HERE/mu-plugins/"*.php "$DOCROOT/wp-content/mu-plugins/"
+copy_into_dir "$DOCROOT/wp-content/mu-plugins" "$HERE/mu-plugins/"*.php
 
 echo "Installing the WebSocket + Turso + KV demo pages ..."
-cp "$HERE/websocket.php"     "$DOCROOT/websocket.php"
-cp "$HERE/post-comment.php"  "$DOCROOT/post-comment.php"
-cp "$HERE/demo-search.php"   "$DOCROOT/demo-search.php"
-cp "$HERE/demo-comments.php" "$DOCROOT/demo-comments.php"
+copy_file "$HERE/websocket.php"     "$DOCROOT/websocket.php"
+copy_file "$HERE/post-comment.php"  "$DOCROOT/post-comment.php"
+copy_file "$HERE/demo-search.php"   "$DOCROOT/demo-search.php"
+copy_file "$HERE/demo-comments.php" "$DOCROOT/demo-comments.php"
 
 echo "Installing the showcase seed generators (token-gated, in-docroot) ..."
-mkdir -p "$DOCROOT/seed"
-cp "$HERE/seed/"*.php "$DOCROOT/seed/"
+copy_into_dir "$DOCROOT/seed" "$HERE/seed/"*.php
 
 echo "Done. Docroot ready at: $DOCROOT"
 echo "Seed the per-site database by running the WordPress web installer once:"
