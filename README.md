@@ -31,6 +31,7 @@ per-event WebSocket handlers that query the same Turso database.
 | `seed/*.php` | Token-gated content/store generators (`EPHPM_SEED_TOKEN`) run **through the drop-in** over HTTP: `content.php` (posts, GD featured images, comments, pages, nav menu), `store.php` (WooCommerce products + orders), `elementor.php` (a sample Elementor page). |
 | `seed/install.sh`, `seed/plugins.txt` | Downloads a magazine theme + ~10 wp.org plugins, then drives the generators — the reproducible "make it busy" recipe. |
 | `ephpm.yaml` | Deploy manifest (php, docroot, `services: {database, kv, websocket}`, seed, health, ini). |
+| `ephpm.json` | Legacy preview metadata: `{ "seed": "wp-install", "php": "8.5" }`. |
 
 ## The full showcase
 
@@ -49,7 +50,6 @@ point: the MySQL DDL/DML those plugins emit (`ON UPDATE CURRENT_TIMESTAMP`,
 IGNORE`, `ADD/DROP PRIMARY KEY`, `INFORMATION_SCHEMA` probes, `FROM dual`)
 is translated to SQLite-compatible SQL by the drop-in so it all works on a
 single embedded database.
-| `ephpm.json` | Legacy preview metadata: `{ "seed": "wp-install", "php": "8.5" }`. |
 
 WordPress core itself is **not committed** — `assemble.sh` fetches it, keeping
 this repo lean and always current.
