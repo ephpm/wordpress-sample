@@ -11,8 +11,11 @@
 # (b) drives the in-docroot seed/*.php generators over HTTP with a shared
 #     one-shot token.
 #
+# Run seed/wp-install.sh FIRST: this script assumes WordPress is installed.
+#
 # Env:
-#   BASE   base URL of the running site      (default http://127.0.0.1:8100)
+#   BASE   base URL of the running site      (default http://127.0.0.1:8080,
+#          the preview nodes' plain-HTTP listener)
 #   HOST   Host header / vhost               (required if BASE is loopback)
 #   DOCROOT  site document root              (required: where wp-content lives)
 #   THEME  wp.org theme slug                 (default colormag)
@@ -20,16 +23,24 @@
 # The generators are gated by EPHPM_SEED_TOKEN. This script mints a random
 # token, exports it (so the ePHPm process the generator runs in can read it —
 # set it in the site's environment/ini), and passes it as ?k=.
+#
+# As a seed step this MUST have its output redirected (`>> .seed.log 2>&1`):
+# switchboard closes the read end of a seed step's stdout and stderr, so the
+# first `echo` below otherwise takes SIGPIPE and kills the step. See the README.
 set -euo pipefail
 
-BASE="${BASE:-http://127.0.0.1:8100}"
+BASE="${BASE:-http://127.0.0.1:8080}"
 HOST="${HOST:-}"
 DOCROOT="${DOCROOT:?set DOCROOT to the site document root}"
 THEME="${THEME:-colormag}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOKEN="${EPHPM_SEED_TOKEN:-$(head -c18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9')}"
 
-hdr=(); [ -n "$HOST" ] && hdr=(-H "Host: $HOST" -H "X-Forwarded-Proto: https")
+# Not `[ -n "$HOST" ] && hdr=(...)`: under `set -e` that whole line's exit
+# status is the test's, so an unset HOST — which the Env block above documents
+# as optional — would abort the script here.
+hdr=()
+if [ -n "$HOST" ]; then hdr=(-H "Host: $HOST" -H "X-Forwarded-Proto: https"); fi
 get(){ curl -fsS "${hdr[@]}" "$BASE/$1"; }
 
 echo ">> installing theme: $THEME"

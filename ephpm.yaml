@@ -8,20 +8,43 @@ build:
   # left untouched rather than a `cp a a` aborting the build (which left an
   # empty/broken docroot on redeploy).
   - "./assemble.sh ."
-  - "composer install --no-dev --optimize-autoloader --no-interaction"   # only if composer.json present
+  # There is no composer.json here (the drop-ins are vendored as real files —
+  # they have to be, see the open_basedir note in the README), so the
+  # unconditional `composer install` this used to run failed on every single
+  # deploy. Guarded so it is a no-op until a composer.json genuinely appears.
+  - "if [ -f composer.json ]; then composer install --no-dev --optimize-autoloader --no-interaction; fi"
 services:
   database: "turso"
   kv: true
   websocket: true
 seed:
-  - "wp core install --url=$PREVIEW_URL --title=\"ePHPm Preview\" --admin_user=admin --admin_email=preview@example.com --skip-email"
+  # Install WordPress by driving its own web installer over HTTP.
+  #
+  # This used to be `wp core install`, which can NEVER succeed here: wp-cli is a
+  # CLI process, and in ePHPm's per-site mode a vhost's database is only opened
+  # when Router::resolve_site maps a *request's* Host to a site key. No request
+  # -> no site -> no database, so every wp-cli DB call dies with "ephpm_db: no
+  # embedded database is active" and each preview sat on the install screen
+  # forever. (`ephpm php` has no --site flag to stand in for a request:
+  # ephpm/ephpm#471.) The web installer IS a request, so it works — the same
+  # over-HTTP rule the seed/*.php generators below already follow.
+  #
+  # Idempotent: a redeploy keeps the per-site database, the script sees
+  # "Already Installed" and exits 0 without touching anything.
+  #
+  # The `>> .seed.log 2>&1` is load-bearing, not tidiness: switchboard pipes a
+  # seed step's stdout AND stderr and closes the read ends, so the first byte a
+  # seed step writes to either raises SIGPIPE and kills it (exit 141, ~5ms).
+  # That is what has been killing the showcase step below on every deploy.
+  # The log is dot-prefixed, so ePHPm serves 403 for it.
+  - "HOST=$PREVIEW_HOST bash seed/wp-install.sh >> .seed.log 2>&1"
   # Full public showcase (magazine theme, ~10 plugins, 150+ posts with
   # featured images, a WooCommerce store, an Elementor page, and the live
   # activity ticker). Downloads theme/plugins from wp.org, then drives the
   # in-docroot seed/*.php generators over HTTP so every insert/activation runs
   # through the db-wordpress drop-in -> Turso. See seed/install.sh.
   # Requires EPHPM_SEED_TOKEN to be exported into the site's PHP environment.
-  - "DOCROOT=. HOST=$PREVIEW_HOST bash seed/install.sh"
+  - "DOCROOT=. HOST=$PREVIEW_HOST bash seed/install.sh >> .seed.log 2>&1"
 env:
   WP_ENVIRONMENT_TYPE: "staging"
 health: "/"

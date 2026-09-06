@@ -13,6 +13,12 @@
 /wp-content/upgrade/
 /wp-content/languages/
 
+# Written into the deployed docroot by the seed steps, never committed.
+# (Both are dot-prefixed so ePHPm answers 403 for them — the docroot is the
+# repository root, so anything NOT dot-prefixed here is publicly served.)
+/.seed.log
+/.wp-admin-credentials
+
 # Per-site databases and assembled docroots.
 *.db
 *.db-wal
