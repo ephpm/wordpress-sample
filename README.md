@@ -29,7 +29,8 @@ per-event WebSocket handlers that query the same Turso database.
 | `post-comment.php` | Ordinary HTTP handler that inserts a comment and `ephpm_ws_broadcast()`s it to both the room and the site-wide `activity` channel. |
 | `mu-plugins/activity-ticker.php` | Site-wide **live activity ticker**: a corner widget injected on every front-end page opens `wss://<host>/?channel=activity`; comments, new posts, WooCommerce orders and page views are broadcast to it from ordinary PHP via `ephpm_ws_broadcast()`. A public visitor sees the site pulse in real time. |
 | `seed/*.php` | Token-gated content/store generators (`EPHPM_SEED_TOKEN`) run **through the drop-in** over HTTP: `content.php` (posts, GD featured images, comments, pages, nav menu), `store.php` (WooCommerce products + orders), `elementor.php` (a sample Elementor page). |
-| `seed/install.sh`, `seed/plugins.txt` | Downloads a magazine theme + ~10 wp.org plugins, then drives the generators — the reproducible "make it busy" recipe. |
+| `seed/wp-install.sh` | Installs WordPress by POSTing its own web installer (`/wp-admin/install.php?step=2`) — the only way that works on a per-site ePHPm node, see below. Idempotent; records the generated admin password in `.wp-admin-credentials`. |
+| `seed/install.sh`, `seed/plugins.txt` | Downloads a magazine theme + ~10 wp.org plugins, then prints the generator recipe — the reproducible "make it busy" starting point. |
 | `ephpm.yaml` | Deploy manifest (php, docroot, `services: {database, kv, websocket}`, seed, health, ini). |
 | `ephpm.json` | Legacy preview metadata: `{ "seed": "wp-install", "php": "8.5" }`. |
 
@@ -94,6 +95,29 @@ The fix (what `assemble.sh` does): the drop-in **and its classes** are copied in
 as **real files** under the docroot, and `wp-config.php` points
 `EPHPM_DB_AUTOLOAD` at the in-docroot `ephpm-db/autoload.php`.
 
+## The other gotcha: `wp core install` cannot work here
+
+wp-cli runs as a **CLI process**, and in ePHPm's per-site mode a vhost's
+database handle only exists inside a **request**: `Router::resolve_site` maps
+the request's `Host` to a site key, and that is the only thing that opens
+`<db.sqlite.dir>/<site-key>.db`. A CLI process has no `Host`, so it has no
+site, so it has no database:
+
+```
+$ cd /srv/ephpm/sites/<site> && ephpm php -r 'ephpm_db_query("SELECT 1");'
+Fatal error: ephpm_db: no embedded database is active (requires [db.sqlite])
+```
+
+`ephpm php` has no `--site`/`--config` flag to stand in for a request
+(ephpm/ephpm#471), so **every** wp-cli database call fails this way — including
+`wp core install`, which is why previews used to land permanently on the
+install screen. It is not a missing PHP binary: `wp` and `composer` on a
+preview node are wrappers that exec `ephpm php <phar>` and both start fine,
+they just have no tenant.
+
+WordPress's own web installer *is* a request, so it works. `seed/wp-install.sh`
+drives it, which is the same over-HTTP rule the `seed/*.php` generators follow.
+
 ## Deploy one preview site
 
 ```bash
@@ -102,22 +126,29 @@ as **real files** under the docroot, and `wp-config.php` points
 
 # 2. Start ePHPm with a preview config (sites_dir, [db.sqlite].dir, preview=true).
 
-# 3. Seed the per-site database ONCE by driving the WP web installer over HTTP.
-curl -s -H 'Host: ephpm-wordpress-sample-pr-1.example.com' \
-  --data-urlencode 'weblog_title=ePHPm Preview' \
-  --data-urlencode 'user_name=admin' \
-  --data-urlencode 'admin_password=<pw>' \
-  --data-urlencode 'admin_password2=<pw>' \
-  --data-urlencode 'pw_weak=1' \
-  --data-urlencode 'admin_email=admin@example.com' \
-  --data-urlencode 'blog_public=0' \
-  --data-urlencode 'Submit=Install WordPress' \
-  'http://127.0.0.1:8100/wp-admin/install.php?step=2'
+# 3. Install WordPress ONCE by driving the WP web installer over HTTP. Safe to
+#    re-run: it exits 0 without touching anything if WordPress is installed.
+HOST=ephpm-wordpress-sample-pr-1.example.com \
+BASE=http://127.0.0.1:8080 \
+  bash seed/wp-install.sh
 ```
 
-A default `wp core install` ships one post (Hello World), one page (Sample
-Page), and one comment — enough to drive the front page, a permalink, and the
-REST API.
+The generated admin password is written to `.wp-admin-credentials` (mode 600)
+in the docroot — dot-prefixed, so ePHPm answers 403 for it. Export
+`ADMIN_PASSWORD` to pin one instead. A redeploy replaces the docroot but keeps
+the per-site database, so the password is **not** reset and that file is gone;
+delete the site's `.db` to start over.
+
+A default install ships one post (Hello World), one page (Sample Page), and one
+comment — enough to drive the front page, a permalink, and the REST API.
+
+### Seed steps must not write to stdout or stderr
+
+switchboard spawns each `seed:` command with both stdout and stderr piped and
+then drops the read ends before waiting, so the first byte a seed step writes
+to fd 1 or 2 raises **SIGPIPE** and kills it — exit 141, in single-digit
+milliseconds, logged only as `seed step failed — continuing`. Every seed step in
+`ephpm.yaml` therefore ends in `>> .seed.log 2>&1`. Keep it.
 
 ## What this preview publishes
 
