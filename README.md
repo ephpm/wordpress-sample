@@ -149,3 +149,26 @@ then drops the read ends before waiting, so the first byte a seed step writes
 to fd 1 or 2 raises **SIGPIPE** and kills it — exit 141, in single-digit
 milliseconds, logged only as `seed step failed — continuing`. Every seed step in
 `ephpm.yaml` therefore ends in `>> .seed.log 2>&1`. Keep it.
+
+## What this preview publishes
+
+This app declares `docroot: "."`, so the **repository root is the web root** —
+every file here is reachable over HTTP unless something refuses it. That is
+deliberate (WordPress core is assembled in place), but it means the contents of
+this repo are public on every preview, and anything added here inherits that.
+
+What refuses a request today:
+
+| Refused by | What it covers |
+|---|---|
+| ePHPm `[server.static] hidden_files = "deny"` (default) | any path with a dot-prefixed segment — `.env`, `.git/`, `.htaccess` |
+| ePHPm `[server.static] deploy_manifests = "deny"` (default, v0.9.1+) | `ephpm.yaml`, `ephpm.yml`, `ephpm.json` |
+| switchboard's deploy pipeline | moves the manifest into `.switchboard/` before the site goes live |
+
+Everything else in this directory is served. `assemble.sh` and
+`seed/plugins.txt` are readable as text; the `seed/*.php` generators are
+executed, not disclosed, and are token-gated on `EPHPM_SEED_TOKEN`.
+
+Treat this repo as public-by-default: never add a credential, a token, or a
+private fixture here, and prefer a dot-prefixed path for anything that must
+ship alongside the site without being served.
