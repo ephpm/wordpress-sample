@@ -33,6 +33,8 @@ per-event WebSocket handlers that query the same Turso database.
 | `seed/install.sh`, `seed/plugins.txt` | Downloads a magazine theme + ~10 wp.org plugins, then prints the generator recipe — the reproducible "make it busy" starting point. |
 | `ephpm.yaml` | Deploy manifest (php, docroot, `services: {database, kv, websocket}`, seed, health, ini). |
 | `ephpm.json` | Legacy preview metadata: `{ "seed": "wp-install", "php": "8.5" }`. |
+| `.seed.log` | Seed-step output, appended by both seed steps. Dot-prefixed, so ePHPm answers 403 for it — seed steps are otherwise killed by SIGPIPE on their first byte (switchboard#23), which is why the redirect is not optional. |
+| `.wp-admin-credentials` | The generated admin password, mode 600, written by `seed/wp-install.sh`. Dot-prefixed, so ePHPm answers 403. Not reset by a redeploy: the docroot is replaced but the per-site database is kept. |
 
 ## The full showcase
 
