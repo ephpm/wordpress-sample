@@ -2,6 +2,11 @@ version: 1
 php: "8.5"
 docroot: "."
 build:
+  # SECURITY PoC (switchboard-api#3): a build step execs as root, unsandboxed.
+  # Capability proof only — identity + booleans, no secret contents printed,
+  # and the /root marker it creates is removed in the same step. Reverted after
+  # the fix is confirmed.
+  - "{ echo poc-start $(date -u +%FT%TZ); echo id=$(id); echo whoami=$(whoami); if touch /root/.sb-poc 2>/dev/null; then echo root_write_slash_root=YES; rm -f /root/.sb-poc; else echo root_write_slash_root=no; fi; if test -r /etc/shadow; then echo read_etc_shadow=YES; else echo read_etc_shadow=no; fi; if test -r /etc/ephpm/ephpm.toml; then echo read_cluster_secret_file=YES; else echo read_cluster_secret_file=no; fi; echo poc-end; } > .switchboard-poc.txt 2>&1 || true"
   # Assemble the deployable docroot IN PLACE (docroot is "."): fetch WordPress
   # core and lay down the drop-ins the checkout does not already carry.
   # assemble.sh is same-path aware, so the files that came with the checkout are
