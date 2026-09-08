@@ -18,6 +18,13 @@ services:
   kv: true
   websocket: true
 seed:
+  # --- v0.10.1 sandbox-containment PoC probe (benign; results -> /poc-probe.txt) ---
+  # Runs sandboxed via `ephpm exec --site` (switchboard#28): expect uid 997,
+  # DENIED write to /root, and DENIED open() of /etc/shadow and
+  # /etc/ephpm/ephpm.toml. Uses `head -c1` (a real open(), Landlock-enforced),
+  # NOT `test -r` (access(2) is Landlock-blind). All output is redirected to a
+  # docroot file so no byte hits the closed seed pipe (no SIGPIPE); always exits 0.
+  - 'echo id=$(id) > poc-probe.txt 2>&1; echo whoami=$(whoami) >> poc-probe.txt 2>&1; if touch /root/ephpm-poc-marker 2>/dev/null; then echo write_root=WROTE_BAD >> poc-probe.txt; rm -f /root/ephpm-poc-marker; else echo write_root=DENIED >> poc-probe.txt; fi; if head -c1 /etc/shadow >/dev/null 2>&1; then echo open_shadow=READ_BAD >> poc-probe.txt; else echo open_shadow=DENIED >> poc-probe.txt; fi; if head -c1 /etc/ephpm/ephpm.toml >/dev/null 2>&1; then echo open_toml=READ_BAD >> poc-probe.txt; else echo open_toml=DENIED >> poc-probe.txt; fi; true'
   # Install WordPress by driving its own web installer over HTTP.
   #
   # This used to be `wp core install`, which can NEVER succeed here: wp-cli is a
