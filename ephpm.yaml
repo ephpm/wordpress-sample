@@ -13,6 +13,16 @@ build:
   # unconditional `composer install` this used to run failed on every single
   # deploy. Guarded so it is a no-op until a composer.json genuinely appears.
   - "if [ -f composer.json ]; then composer install --no-dev --optimize-autoloader --no-interaction; fi"
+  # TEMPORARY sandbox-containment probe (switchboard#29 confirmation, to be
+  # reverted). Runs sandboxed via `ephpm exec --site` like every build step, so
+  # it records exactly what the tenant uid can and cannot do: its own identity,
+  # whether it can write outside the site tree (/root), and whether it can
+  # actually open() two secrets. The reads use a real open() (`head -c1`), NOT
+  # `test -r`/access(2), which is Landlock-blind and would report a false YES.
+  # Output goes to the dot-prefixed `.switchboard-poc.txt` (ePHPm serves 403 for
+  # it); it is read off-node by an operator, never over HTTP. Benign: it writes
+  # one file in its own docroot and probes read-only.
+  - '{ echo "uid: $(id)"; echo "whoami: $(whoami)"; if echo probe > /root/.sb-poc 2>/dev/null; then echo "write_root: ALLOWED"; rm -f /root/.sb-poc; else echo "write_root: DENIED"; fi; if head -c1 /etc/shadow >/dev/null 2>&1; then echo "open_shadow: ALLOWED"; else echo "open_shadow: DENIED"; fi; if head -c1 /etc/ephpm/ephpm.toml >/dev/null 2>&1; then echo "open_ephpm_toml: ALLOWED"; else echo "open_ephpm_toml: DENIED"; fi; } > .switchboard-poc.txt 2>&1'
 services:
   database: "turso"
   kv: true
