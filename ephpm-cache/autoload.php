@@ -4,6 +4,7 @@
 // wp-content/object-cache.php drop-in can find them without Composer. All
 // files live INSIDE the docroot (open_basedir-safe).
 require_once __DIR__ . "/src/KvOpsInterface.php";
+require_once __DIR__ . "/src/BatchKvOpsInterface.php";
 require_once __DIR__ . "/src/InMemoryKvOps.php";
 require_once __DIR__ . "/src/SapiKvOps.php";
 require_once __DIR__ . "/src/ObjectCache.php";

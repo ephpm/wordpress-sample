@@ -77,6 +77,7 @@ if (!class_exists('Ephpm\\Cache\\WordPress\\ObjectCache')) {
             $iface = $src . '/KvOpsInterface.php';
             if (is_file($iface)) {
                 require_once $iface;
+                require_once $src . '/BatchKvOpsInterface.php';
                 require_once $src . '/InMemoryKvOps.php';
                 require_once $src . '/SapiKvOps.php';
                 require_once $src . '/ObjectCache.php';
@@ -300,13 +301,20 @@ if (!function_exists('wp_cache_reset')) {
 if (!function_exists('wp_cache_supports')) {
     function wp_cache_supports(string $feature): bool
     {
+        // NOTE: 'flush_group' is deliberately NOT advertised. The KV SAPI has
+        // no complete key-enumeration primitive (v0.13.0's ephpm_kv_scan()
+        // sees only the local node's keyspace in a cluster), so a *persistent* group
+        // cannot actually be flushed selectively (see ObjectCache::flush_group,
+        // which returns false for persistent groups). Advertising it would
+        // promise a capability we can only honour for runtime-only groups, so
+        // callers that gate on wp_cache_supports('flush_group') would wrongly
+        // believe the persistent tier was cleared.
         return match ($feature) {
             'add_multiple',
             'set_multiple',
             'get_multiple',
             'delete_multiple',
-            'flush_runtime',
-            'flush_group' => true,
+            'flush_runtime' => true,
             default => false,
         };
     }

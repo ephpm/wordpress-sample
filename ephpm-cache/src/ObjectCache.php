@@ -146,10 +146,40 @@ final class ObjectCache
         if (\function_exists('wp_suspend_cache_addition') && \wp_suspend_cache_addition()) {
             return false;
         }
-        if ($this->existsInRuntime($key, $group) || $this->existsInStore($key, $group)) {
+
+        // A value already materialised in this request's runtime array always
+        // loses the race locally — this mirrors WP core's own `_exists()`
+        // short-circuit and avoids a needless store round-trip.
+        if ($this->existsInRuntime($key, $group)) {
             return false;
         }
-        return $this->set($key, $data, $group, $ttl);
+
+        // Non-persistent groups live only in the runtime array; there is no
+        // shared store to race against, so a plain check-then-set is correct
+        // and keeps the "never touches the backend" guarantee.
+        if ($this->isNonPersistent($group)) {
+            return $this->set($key, $data, $group, $ttl);
+        }
+
+        // Persistent path: `setnx` is the atomic add primitive — a single
+        // insert-if-absent under the KV store's per-shard lock. Two concurrent
+        // add()s therefore cannot both win, which WordPress depends on
+        // (`wp_cache_add()` is used as a cron/lock mutex). The old
+        // check-then-set (`exists()` then `set()`) was a race: both callers
+        // could observe "absent" and both write.
+        if (\is_object($data)) {
+            $data = clone $data;
+        }
+        $inserted = $this->ops->setnx(
+            $this->build_key($key, $group),
+            $this->serialize($data),
+            \max(0, $ttl),
+        );
+        if (!$inserted) {
+            return false;
+        }
+        $this->cache[$group][(string) $key] = $data;
+        return true;
     }
 
     /**
@@ -221,9 +251,40 @@ final class ObjectCache
      */
     public function set_multiple(array $data, string $group = 'default', int $ttl = 0): array
     {
-        $result = [];
+        if ($group === '') {
+            $group = 'default';
+        }
+        if ($this->isNonPersistent($group) || !$this->ops instanceof BatchKvOpsInterface) {
+            $result = [];
+            foreach ($data as $key => $value) {
+                $result[$key] = $this->set($key, $value, $group, $ttl);
+            }
+            return $result;
+        }
+
+        // Batch path: same runtime write-through as set(), then a single
+        // mset for the whole batch (one call into the store on ePHPm
+        // >= v0.13.0 instead of one per key). Every key shares $ttl, which
+        // is exactly what set_multiple() promises.
+        $storeKeys = [];
+        $payload = [];
         foreach ($data as $key => $value) {
-            $result[$key] = $this->set($key, $value, $group, $ttl);
+            if (\is_object($value)) {
+                $value = clone $value;
+            }
+            $this->cache[$group][(string) $key] = $value;
+            $storeKey = $this->build_key($key, $group);
+            $storeKeys[$key] = $storeKey;
+            $payload[$storeKey] = $this->serialize($value);
+        }
+        if ($payload === []) {
+            return [];
+        }
+
+        $written = $this->ops->mset($payload, \max(0, $ttl));
+        $result = [];
+        foreach ($storeKeys as $key => $storeKey) {
+            $result[$key] = $written[$storeKey] ?? false;
         }
         return $result;
     }
@@ -243,15 +304,25 @@ final class ObjectCache
         }
         $skey = (string) $key;
 
+        // Non-persistent groups live ONLY in the runtime array — there is no
+        // persistent tier behind them. `$force` bypasses the local cache only
+        // to re-read the shared store, so for a runtime-only group a forced
+        // read must still serve the runtime value (never fall through to the
+        // store, which would spuriously miss).
+        if ($this->isNonPersistent($group)) {
+            if (isset($this->cache[$group]) && \array_key_exists($skey, $this->cache[$group])) {
+                $found = true;
+                $value = $this->cache[$group][$skey];
+                return \is_object($value) ? clone $value : $value;
+            }
+            $found = false;
+            return false;
+        }
+
         if (!$force && isset($this->cache[$group]) && \array_key_exists($skey, $this->cache[$group])) {
             $found = true;
             $value = $this->cache[$group][$skey];
             return \is_object($value) ? clone $value : $value;
-        }
-
-        if ($this->isNonPersistent($group)) {
-            $found = false;
-            return false;
         }
 
         $raw = $this->ops->get($this->build_key($key, $group));
@@ -275,9 +346,54 @@ final class ObjectCache
      */
     public function get_multiple(array $keys, string $group = 'default', bool $force = false): array
     {
+        if ($group === '') {
+            $group = 'default';
+        }
+        if ($this->isNonPersistent($group) || !$this->ops instanceof BatchKvOpsInterface) {
+            $result = [];
+            foreach ($keys as $key) {
+                $result[$key] = $this->get($key, $group, $force);
+            }
+            return $result;
+        }
+
+        // Batch path: identical per-key semantics to get() — runtime array
+        // first (unless $force), store on a miss, hydrate the runtime array —
+        // but every store miss is fetched with ONE mget (a single call into
+        // the store on ePHPm >= v0.13.0) instead of one get() per key.
         $result = [];
+        /** @var array<string, int|string> $pending skey => original key */
+        $pending = [];
         foreach ($keys as $key) {
-            $result[$key] = $this->get($key, $group, $force);
+            $skey = (string) $key;
+            if (!$force && isset($this->cache[$group]) && \array_key_exists($skey, $this->cache[$group])) {
+                $value = $this->cache[$group][$skey];
+                $result[$key] = \is_object($value) ? clone $value : $value;
+                continue;
+            }
+            // Placeholder keeps the caller's key order; filled below on a hit.
+            $result[$key] = false;
+            $pending[$skey] = $key;
+        }
+        if ($pending === []) {
+            return $result;
+        }
+
+        $storeKeys = [];
+        foreach ($pending as $key) {
+            $storeKeys[] = $this->build_key($key, $group);
+        }
+        $raws = $this->ops->mget($storeKeys);
+
+        $i = 0;
+        foreach ($pending as $skey => $key) {
+            $raw = $raws[$i++] ?? null;
+            if ($raw === null) {
+                continue;
+            }
+            $value = $this->unserialize($raw);
+            $this->cache[$group][(string) $skey] = $value;
+            $result[$key] = \is_object($value) ? clone $value : $value;
         }
         return $result;
     }
@@ -333,6 +449,14 @@ final class ObjectCache
             return $this->incrRuntime($key, $offset, $group);
         }
 
+        // WordPress core semantics: incr/decr on a MISSING key returns false —
+        // it does not create the key. The raw KV SAPI's incr_by would instead
+        // create it at the delta (INCR on a missing key => the delta), so gate
+        // on existence in the store first and only then increment.
+        if (!$this->existsInStore($key, $group)) {
+            return false;
+        }
+
         try {
             $value = $this->ops->incrBy($this->build_key($key, $group), $offset);
         } catch (\RuntimeException) {
@@ -378,9 +502,13 @@ final class ObjectCache
     /**
      * Best-effort flush of a single group.
      *
-     * The KV SAPI offers no key-enumeration or prefix-scan primitive, so a
+     * The KV SAPI offers no complete key-enumeration primitive, so a
      * persistent group cannot be selectively cleared without tracking every
-     * key we've written. We therefore clear the group from the runtime
+     * key we've written. (ePHPm v0.13.0 adds `ephpm_kv_scan()`, but in a
+     * cluster it lists only the local node's keyspace — string values above
+     * the cluster's small-value threshold live only on their replica nodes —
+     * so a scan-based flush would silently miss keys. It is deliberately not
+     * used here.) We therefore clear the group from the runtime
      * array (always possible) and report success only for non-persistent
      * groups, where the runtime array IS the whole story. For persistent
      * groups this returns false to stay honest: the in-store entries
@@ -455,7 +583,13 @@ final class ObjectCache
     private function incrRuntime($key, int $offset, string $group): int|false
     {
         $skey = (string) $key;
-        $current = $this->cache[$group][$skey] ?? 0;
+        // Match WP core: incr/decr on a missing key returns false rather than
+        // creating it at the delta. (This is the runtime-only counterpart of
+        // the existsInStore() gate on the persistent path.)
+        if (!$this->existsInRuntime($key, $group)) {
+            return false;
+        }
+        $current = $this->cache[$group][$skey];
         if (!\is_numeric($current)) {
             return false;
         }

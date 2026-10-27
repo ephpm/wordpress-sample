@@ -13,7 +13,7 @@ namespace Ephpm\Cache\WordPress;
  * in milliseconds; lazy expiry (a key is only "gone" when it's looked up
  * after its deadline). No background sweeper.
  */
-final class InMemoryKvOps implements KvOpsInterface
+final class InMemoryKvOps implements BatchKvOpsInterface
 {
     /** @var array<string, string> */
     private array $values = [];
@@ -34,6 +34,18 @@ final class InMemoryKvOps implements KvOpsInterface
         } else {
             unset($this->deadlines[$key]);
         }
+        return true;
+    }
+
+    public function setnx(string $key, string $value, int $ttlSeconds = 0): bool
+    {
+        // Insert only when no live entry exists. A key whose deadline has
+        // already passed is treated as absent (lazy expiry via liveValue),
+        // so setnx over an expired key succeeds — matching the SAPI.
+        if ($this->liveValue($key) !== null) {
+            return false;
+        }
+        $this->set($key, $value, $ttlSeconds);
         return true;
     }
 
@@ -101,6 +113,24 @@ final class InMemoryKvOps implements KvOpsInterface
         $this->values = [];
         $this->deadlines = [];
         return true;
+    }
+
+    public function mget(array $keys): array
+    {
+        $out = [];
+        foreach ($keys as $key) {
+            $out[] = $this->liveValue($key);
+        }
+        return $out;
+    }
+
+    public function mset(array $values, int $ttlSeconds = 0): array
+    {
+        $out = [];
+        foreach ($values as $key => $value) {
+            $out[$key] = $this->set((string) $key, $value, $ttlSeconds);
+        }
+        return $out;
     }
 
     /**

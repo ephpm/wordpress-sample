@@ -21,7 +21,7 @@ per-event WebSocket handlers that query the same Turso database.
 | `wp-config.php` | Dynamic-host, HTTPS-aware config. Derives `WP_HOME`/`WP_SITEURL` from the request `Host`, and the scheme from `X-Forwarded-Proto` (TLS is terminated at the edge). One template serves every preview host. |
 | `dropin/db.php` | The `ephpm/db-wordpress` database drop-in — WordPress on per-site Turso (vendored). |
 | `ephpm-db/src/*.php`, `ephpm-db/autoload.php` | The db drop-in's classes + its in-docroot autoloader (`EPHPM_DB_AUTOLOAD`). |
-| `dropin/object-cache.php` | The `ephpm/cache-wordpress` object-cache drop-in — WordPress object cache on the embedded KV store (vendored). |
+| `dropin/object-cache.php` | The `ephpm/cache-wordpress` (v0.2.0) object-cache drop-in — WordPress object cache on the embedded KV store (vendored). |
 | `ephpm-cache/src/*.php`, `ephpm-cache/autoload.php` | The cache drop-in's classes + its in-docroot autoloader (`EPHPM_CACHE_AUTOLOAD`). |
 | `websocket.php` | Native-WebSocket entrypoint (`[server] websocket_files`). Routes on `$_SERVER['WS_EVENT']`; queries the per-site Turso DB from socket events. |
 | `demo-search.php` | Live post-title typeahead streamed over a WebSocket (searches `wp_posts`). |
